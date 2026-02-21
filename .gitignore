@@ -1,0 +1,10 @@
+# Screenshots (this is the watch directory, don't track actual images)
+*.png
+*.jpg
+*.jpeg
+
+# Logs
+*.log
+
+# Dedup markers
+.uploaded/
