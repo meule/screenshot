@@ -14,17 +14,8 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
 
 upload() {
   local file="$1"
-  local base
-  base=$(basename "$file")
-
-  # Skip dotfiles and non-image files
-  [[ "$base" == .* ]] && return 0
-  [[ "$base" != *.png && "$base" != *.jpg && "$base" != *.jpeg ]] && return 0
-
-  # Skip files that existed before the watcher started
-  local file_mtime
-  file_mtime=$(stat -f%m "$file" 2>/dev/null || echo 0)
-  [[ "$file_mtime" -lt "$START_TIME" ]] && return 0
+  local key="$2"
+  local url="$3"
 
   # Wait for file write to complete (poll size for up to 3s)
   local prev_size=-1 curr_size
@@ -35,27 +26,18 @@ upload() {
     sleep 0.5
   done
 
-  local ext="${base##*.}"
-  local rand
-  rand=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c4)
-  local key
-  key="$(date '+%Y/%m/%d/%H%M%S')-${rand}.${ext}"
-  local url="https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}"
-
-  # Copy URL to clipboard immediately, before upload
-  echo -n "$url" | pbcopy
-  log "Uploading $base -> $url"
+  log "Uploading $(basename "$file") -> $url"
 
   if aws s3 cp "$file" "s3://$BUCKET/$key" \
     --profile "$PROFILE" \
     --region "$REGION" \
-    --content-type "image/${ext}" \
+    --content-type "image/${file##*.}" \
     --quiet 2>>"$LOG"; then
 
     log "Uploaded: $url"
     terminal-notifier -title "Screenshot uploaded" -message "$url" -open "$url" -sound Glass
   else
-    log "FAILED to upload $base"
+    log "FAILED to upload $(basename "$file")"
     osascript -e 'display notification "Upload failed — check log" with title "Screenshot upload error" sound name "Basso"'
   fi
 }
@@ -68,9 +50,27 @@ log "Watcher started (PID $$)"
 # Use process substitution so the while loop runs in the main shell
 while IFS= read -r -d '' file; do
   base=$(basename "$file")
-  marker="$DEDUP_DIR/$base"
+
+  # Skip dotfiles and non-image files
+  [[ "$base" == .* ]] && continue
+  [[ "$base" != *.png && "$base" != *.jpg && "$base" != *.jpeg ]] && continue
+
+  # Skip files that existed before the watcher started
+  file_mtime=$(stat -f%m "$file" 2>/dev/null || echo 0)
+  [[ "$file_mtime" -lt "$START_TIME" ]] && continue
+
   # Deduplicate: skip if marker exists (from a prior fswatch event for same file)
+  marker="$DEDUP_DIR/$base"
   [[ -f "$marker" ]] && continue
   touch "$marker"
-  upload "$file" &
+
+  # Generate URL and copy to clipboard immediately
+  ext="${base##*.}"
+  rand=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c4)
+  key="$(date '+%Y/%m/%d/%H%M%S')-${rand}.${ext}"
+  url="https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}"
+  echo -n "$url" | pbcopy
+
+  # Upload in background
+  upload "$file" "$key" "$url" &
 done < <(fswatch -0 "$WATCH_DIR")
