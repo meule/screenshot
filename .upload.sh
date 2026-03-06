@@ -26,7 +26,7 @@ upload() {
     sleep 0.5
   done
 
-  log "Uploading $(basename "$file") -> $url"
+  log "Uploading ${file##*/} -> $url"
 
   if aws s3 cp "$file" "s3://$BUCKET/$key" \
     --profile "$PROFILE" \
@@ -37,40 +37,36 @@ upload() {
     log "Uploaded: $url"
     terminal-notifier -title "Screenshot uploaded" -message "$url" -open "$url" -sound Glass
   else
-    log "FAILED to upload $(basename "$file")"
+    log "FAILED to upload ${file##*/}"
     osascript -e 'display notification "Upload failed — check log" with title "Screenshot upload error" sound name "Basso"'
   fi
 }
 
-# Record startup time — ignore files that existed before we started
-START_TIME=$(date +%s)
+# Mark all existing files as already seen so we don't upload them on start
+for f in "$WATCH_DIR"/*.png "$WATCH_DIR"/*.jpg "$WATCH_DIR"/*.jpeg; do
+  [[ -f "$f" ]] && touch "$DEDUP_DIR/${f##*/}"
+done
 
 log "Watcher started (PID $$)"
 
-# Use process substitution so the while loop runs in the main shell
-while IFS= read -r -d '' file; do
-  base=$(basename "$file")
+# Poll every 0.2s — avoids FSEvents coalescing delay (~1-2s)
+while true; do
+  for file in "$WATCH_DIR"/*.png "$WATCH_DIR"/*.jpg "$WATCH_DIR"/*.jpeg; do
+    [[ -f "$file" ]] || continue
+    base="${file##*/}"
+    [[ "$base" == .* ]] && continue
 
-  # Skip dotfiles and non-image files
-  [[ "$base" == .* ]] && continue
-  [[ "$base" != *.png && "$base" != *.jpg && "$base" != *.jpeg ]] && continue
+    marker="$DEDUP_DIR/$base"
+    [[ -f "$marker" ]] && continue
+    touch "$marker"
 
-  # Skip files that existed before the watcher started
-  file_mtime=$(stat -f%m "$file" 2>/dev/null || echo 0)
-  [[ "$file_mtime" -lt "$START_TIME" ]] && continue
+    # Generate URL and copy to clipboard immediately
+    ext="${base##*.}"
+    key="$(date '+%Y/%m/%d/%H%M%S')-$(printf '%04x' $RANDOM).${ext}"
+    url="https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}"
+    echo -n "$url" | pbcopy
 
-  # Deduplicate: skip if marker exists (from a prior fswatch event for same file)
-  marker="$DEDUP_DIR/$base"
-  [[ -f "$marker" ]] && continue
-  touch "$marker"
-
-  # Generate URL and copy to clipboard immediately
-  ext="${base##*.}"
-  rand=$(printf '%04x' $RANDOM)
-  key="$(date '+%Y/%m/%d/%H%M%S')-${rand}.${ext}"
-  url="https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}"
-  echo -n "$url" | pbcopy
-
-  # Upload in background
-  upload "$file" "$key" "$url" &
-done < <(fswatch -0 --latency 0.1 "$WATCH_DIR")
+    upload "$file" "$key" "$url" &
+  done
+  sleep 0.2
+done
