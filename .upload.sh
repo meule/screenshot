@@ -66,7 +66,7 @@ while IFS= read -r -d '' file; do
 
   # Generate URL and copy to clipboard immediately
   ext="${base##*.}"
-  rand=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c4)
+  rand=$(printf '%04x' $RANDOM)
   key="$(date '+%Y/%m/%d/%H%M%S')-${rand}.${ext}"
   url="https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}"
   echo -n "$url" | pbcopy
