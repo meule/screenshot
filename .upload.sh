@@ -73,4 +73,4 @@ while IFS= read -r -d '' file; do
 
   # Upload in background
   upload "$file" "$key" "$url" &
-done < <(fswatch -0 "$WATCH_DIR")
+done < <(fswatch -0 --latency 0.1 "$WATCH_DIR")
