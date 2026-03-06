@@ -8,6 +8,7 @@ REGION="eu-central-1"
 PROFILE="kostya"
 LOG="$WATCH_DIR/.upload.log"
 DEDUP_DIR="$WATCH_DIR/.uploaded"
+PENDING="$WATCH_DIR/.pending_url"
 mkdir -p "$DEDUP_DIR"
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
@@ -47,9 +48,13 @@ for f in "$WATCH_DIR"/*.png "$WATCH_DIR"/*.jpg "$WATCH_DIR"/*.jpeg; do
   [[ -f "$f" ]] && touch "$DEDUP_DIR/${f##*/}"
 done
 
-log "Watcher started (PID $$)"
+# Launch the keyboard hook (detects screenshot keypresses for instant clipboard)
+pkill -f '.screenshot-hook' 2>/dev/null
+"$WATCH_DIR/.screenshot-hook" &
+HOOK_PID=$!
+log "Watcher started (PID $$), hook PID $HOOK_PID"
 
-# Poll every 0.2s — avoids FSEvents coalescing delay (~1-2s)
+# Poll every 0.2s for new files
 while true; do
   for file in "$WATCH_DIR"/*.png "$WATCH_DIR"/*.jpg "$WATCH_DIR"/*.jpeg; do
     [[ -f "$file" ]] || continue
@@ -60,12 +65,28 @@ while true; do
     [[ -f "$marker" ]] && continue
     touch "$marker"
 
-    # Generate URL and copy to clipboard immediately
     ext="${base##*.}"
-    key="$(date '+%Y/%m/%d/%H%M%S')-$(printf '%04x' $RANDOM).${ext}"
-    url="https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}"
-    echo -n "$url" | pbcopy
 
+    # Use the pending URL from the keyboard hook if it's fresh (< 30s old)
+    url=""
+    if [[ -f "$PENDING" ]]; then
+      pending_age=$(( $(date +%s) - $(stat -f%m "$PENDING" 2>/dev/null || echo 0) ))
+      if [[ $pending_age -lt 30 ]]; then
+        url=$(cat "$PENDING")
+        # Fix extension to match actual file (hook always generates .png)
+        url="${url%.*}.${ext}"
+      fi
+      rm -f "$PENDING"
+    fi
+
+    # Fallback: generate URL now and copy to clipboard
+    if [[ -z "$url" ]]; then
+      key="$(date '+%Y/%m/%d/%H%M%S')-$(printf '%04x' $RANDOM).${ext}"
+      url="https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}"
+      echo -n "$url" | pbcopy
+    fi
+
+    key="${url#https://${BUCKET}.s3.${REGION}.amazonaws.com/}"
     upload "$file" "$key" "$url" &
   done
   sleep 0.2
